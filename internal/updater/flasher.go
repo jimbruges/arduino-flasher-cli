@@ -392,3 +392,6 @@ func appendBoardSerial(args []string, serialStr string) ([]string, error) {
 	}
 	return args, nil
 }
+
+// InstallQDL installs the embedded QDL in a private directory. Call cleanup when done.
+func InstallQDL() (*paths.Path, func(), error) { return installQdl() }

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/arduino/arduino-flasher-cli/cmd/arduino-flasher-cli/download"
 	"github.com/arduino/arduino-flasher-cli/cmd/arduino-flasher-cli/drivers"
 	"github.com/arduino/arduino-flasher-cli/cmd/arduino-flasher-cli/flash"
+	"github.com/arduino/arduino-flasher-cli/cmd/arduino-flasher-cli/golden"
 	"github.com/arduino/arduino-flasher-cli/cmd/arduino-flasher-cli/list"
 	"github.com/arduino/arduino-flasher-cli/cmd/arduino-flasher-cli/version"
 	"github.com/arduino/arduino-flasher-cli/cmd/feedback"
@@ -35,12 +37,13 @@ func main() {
 		Short: "A CLI to update your Arduino UNO Q board, by downloading and flashing the latest Arduino Linux image",
 		Example: " " + os.Args[0] + " flash unoq\n" +
 			" " + os.Args[0] + " list\n",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			format, ok := feedback.ParseOutputFormat(format)
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			parsedFormat, ok := feedback.ParseOutputFormat(format)
 			if !ok {
-				feedback.Fatal(i18n.Tr("Invalid output format: %s", format), feedback.ErrBadArgument)
+				return fmt.Errorf("%s", i18n.Tr("Invalid output format: %s", format))
 			}
-			feedback.SetFormat(format)
+			feedback.SetFormat(parsedFormat)
+			return nil
 		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -50,6 +53,7 @@ func main() {
 
 	rootCmd.AddCommand(
 		flash.NewFlashCmd(),
+		golden.NewCommand(),
 		drivers.NewInstallDriversCmd(),
 		list.NewListCmd(),
 		download.NewDownloadCmd(),
@@ -60,7 +64,25 @@ func main() {
 
 	ctx := context.Background()
 	ctx, _ = cleanup.InterruptableContext(ctx)
-	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		slog.Error(err.Error())
+	if err := executeCommand(ctx, rootCmd); err != nil {
+		os.Exit(1)
 	}
+}
+
+// The application silences Cobra's automatic usage globally. Golden workflows
+// show the failing subcommand's usage explicitly, including errors detected
+// before RunE (unknown commands, flag parsing, and required flag groups).
+func executeCommand(ctx context.Context, root *cobra.Command) error {
+	cmd, err := root.ExecuteContextC(ctx)
+	if err == nil {
+		return nil
+	}
+	for parent := cmd; parent != nil; parent = parent.Parent() {
+		if parent.Name() == "golden" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Error: %v\n\n%s", err, cmd.UsageString())
+			return err
+		}
+	}
+	slog.Error(err.Error())
+	return err
 }

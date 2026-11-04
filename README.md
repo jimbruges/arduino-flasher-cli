@@ -18,6 +18,66 @@ Build it with `task build` and run:
 ./build/arduino-flasher-cli flash path/to/downloaded/image
 ```
 
+## Golden images and batch flashing
+
+Capture a configured UNO Q or VENTUNO Q, then copy its Linux storage to other
+boards of the same model and storage capacity. Shut down the source cleanly,
+connect it in EDL mode, and leave the EDL jumper fitted during capture:
+
+```sh
+arduino-flasher-cli golden capture ./golden-unoq --board unoq
+```
+
+With exactly one EDL device connected, its serial is selected automatically.
+With several connected, add `--serial 0x1234ABCD` to choose the source. The output
+directory must not already exist. For VENTUNO Q, use `--board ventunoq` and an
+output name such as `./golden-ventunoq`.
+
+The matching Firehose programmer is obtained automatically from the latest
+official image for the board's default distribution. The image archive is
+checksum-verified and retained in the shared cache; only the programmer is
+extracted. The first run may download several gigabytes. Use `--version VERSION`
+to select a particular image release, or `--programmer /path/to/prog_firehose_ddr.elf`
+to use a local programmer without accessing the image index.
+
+Connect the matching target boards in EDL mode, then preview and run a batch:
+
+```sh
+# List connected EDL devices and their serials
+arduino-flasher-cli golden devices
+
+# Check the image and preview targets without writing
+arduino-flasher-cli golden flash ./golden-unoq --board unoq --all --dry-run
+
+# Flash up to four boards concurrently and verify the complete contents
+arduino-flasher-cli golden flash ./golden-unoq --board unoq --all --jobs 4 --yes
+```
+
+`--all` selects connected EDL devices and excludes the captured source. It cannot
+identify board models, so connect only matching targets. To select specific
+boards, replace `--all` with `--serial 0x11111111,0x22222222`.
+Each board prints `VERIFIED` with its serial when finished; remove that board's
+EDL jumper and power-cycle it to boot Linux.
+
+Capture and flashing show compact progress with bytes, elapsed time, speed and
+an approximate phase ETA. Updates identify each board and appear at progress
+milestones, with a one-minute heartbeat during waits. Write progress counts
+acknowledged chunks. A final table compares write, readback, checksum and total
+times and written/skipped bytes for each target. With `--skip-unchanged`, the
+comparison reports how much needs writing and identifies boards already matching
+the image. Add `--verbose-progress` for frequent diagnostic updates.
+Progress goes to stderr; JSON results stay on stdout.
+
+Add `--skip-unchanged` to read targets first and write only differing regions,
+while still verifying the complete image. This can speed up restores when the
+existing contents are similar. Capture needs space for the full raw storage;
+flashing also needs one image's worth of scratch space per active worker.
+
+Golden images include Linux settings, credentials and device identities, but
+**do not capture or flash the separate MCU firmware**. See the
+[golden-image guide](docs/golden-images.md) for preparation, storage requirements,
+advanced options and the [UNO Q validation results](docs/unoq-validation.md).
+
 ## Download images
 
 `arduino-flasher-cli download unoq` saves the image archive in the user cache
