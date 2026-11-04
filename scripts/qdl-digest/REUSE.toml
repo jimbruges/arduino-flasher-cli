@@ -1,0 +1,6 @@
+version = 1
+
+[[annotations]]
+path = "storage-digest.patch"
+SPDX-FileCopyrightText = "QDL contributors and Arduino s.r.l. and/or its affiliated companies"
+SPDX-License-Identifier = "BSD-3-Clause"

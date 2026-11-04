@@ -8,7 +8,9 @@ package golden
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -104,6 +106,15 @@ func (f *fakeDevice) run(ctx context.Context, dir, s, storage, loader string, xm
 				}
 				copy(disk[start:end], data[offset:offset+end-start])
 				f.writes++
+			case "getsha256digest":
+				data := append([]byte(nil), disk[start:end]...)
+				if s == f.corrupt && filepath.Base(path) == "digest-verify.xml" {
+					data[0] ^= 1
+				}
+				hash := sha256.Sum256(data)
+				if err := os.WriteFile(p, []byte(hex.EncodeToString(hash[:])), 0600); err != nil {
+					return err
+				}
 			case "read":
 				data := append([]byte(nil), disk[start:end]...)
 				if s == f.corrupt && filepath.Base(path) == "verify.xml" {

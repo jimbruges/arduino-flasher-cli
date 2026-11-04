@@ -70,9 +70,33 @@ already contains the required bytes, or using a validated operation that produce
 them. A separate partition/filesystem provisioning mode could omit free space,
 but has different semantics from an exact raw clone.
 
-Digest support needs production integration, parser/error tests, and a write-then-
-verify hardware trial before use for fleet flashing. No new writes were performed
-as part of this research. Golden cloning currently covers AP storage, not MCU firmware.
+## Integrated implementation validation
+
+The CLI now implements explicit digest verification and hierarchical partial-write
+comparison; see [usage and helper setup](golden-images.md#storage-digest-verification).
+Readback remains the default. The native helper is a reproducible pinned-source
+build rather than a replacement for embedded QDL on every supported platform.
+
+On 2026-11-04, the integrated CLI ran two UNO Q targets concurrently with
+--skip-unchanged --verification digest. Both matched the complete golden image:
+0x8ED963AB finished in 131.850s and 0xC2B2F977 in 131.666s. The batch took 2m23s,
+including source checks and shared block-hash preparation. Each skipped all
+15,675,162,624 bytes, with no writes or USB storage readback beyond geometry probes.
+Storage digest comparison itself took approximately 129s per target.
+
+The embedded QDL then rewrote two 1 MiB ranges on 0x8ED963AB with identical golden
+bytes, including a range with a nonzero source file offset. Subsequent helper
+digests matched the source for both ranges. These checks exercised actual writes
+and storage digest verification without changing target contents. Actual changed-
+range selection/coalescing and complete final verification after partial/full writes
+are exercised by byte-addressed device tests, including corruption outside writes.
+A factory-board partial-write batch and 16-board throughput remain to be measured.
+
+The full Go race suite and vet passed. Native parser tests reject malformed,
+duplicate and missing digests and preserve ACK/NAK handling. Platform/board limits
+are documented: the helper is built locally on macOS/Linux; VENTUNO Q storage
+digest hardware support has not yet been established. Golden cloning covers AP
+storage, not MCU firmware.
 
 References: [QDL v2.4](https://github.com/linux-msm/qdl/tree/v2.4),
 [Firehose digest command](https://github.com/bkerler/edl/blob/master/edlclient/Library/firehose.py).

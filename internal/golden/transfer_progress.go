@@ -55,6 +55,12 @@ func newTransferProgress(ctx context.Context, dir, serial string, xmlPaths []str
 			name = "pre-read"
 		case "restore":
 			name = "write"
+		case "digest-compare":
+			name = "compare storage digests"
+		case "digest-refine":
+			name = "locate changed ranges"
+		case "digest-verify":
+			name = "verify storage digests"
 		case "verify":
 			name = "readback"
 		}
@@ -126,6 +132,9 @@ func (t *transferProgress) lineLocked(line string) {
 	}
 	op := p.ops[p.next]
 	verb, name := "read", op.File
+	if op.XMLName.Local == "getsha256digest" {
+		verb = "hashed"
+	}
 	if op.XMLName.Local == "program" {
 		verb, name = "flashed", op.Label
 	}
@@ -141,7 +150,7 @@ func (t *transferProgress) lineLocked(line string) {
 		t.current++
 		t.started = time.Now()
 		t.emitLocked(false, false)
-	} else if op.XMLName.Local == "program" {
+	} else if op.XMLName.Local == "program" || op.XMLName.Local == "getsha256digest" {
 		// Publish fresh measurements immediately instead of waiting for a timer.
 		t.emitLocked(false, false)
 	}

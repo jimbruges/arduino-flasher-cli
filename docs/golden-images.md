@@ -268,6 +268,49 @@ observational comparison. An identical target needed no writes and finished
 after its pre-read in 17m 52s. Write savings do not directly predict time savings
 when the shared USB path limits reading.
 
+## Storage digest verification
+
+For multi-board fixtures, verify storage on each board and transfer only SHA-256
+responses over USB. Build the native helper once (macOS/Linux; see its
+[build requirements](../scripts/qdl-digest/README.md)):
+
+```sh
+scripts/qdl-digest/build.sh
+./build/arduino-flasher-cli golden flash ./golden-unoq \
+  --board unoq --all --jobs 4 --skip-unchanged \
+  --verification digest --digest-qdl ./build/qdl-digest --yes
+```
+
+The CLI validates the complete source bundle as usual. With `--skip-unchanged`,
+it prepares smaller source block hashes once per batch, then asks each board to
+hash the manifest's ranges (up to 1 GiB). Matching ranges are verified and skipped.
+Mismatching ranges are compared in 64 MiB blocks; adjacent changed blocks within
+a source file are coalesced and written. Any written target is then hashed across
+**every captured sector**, including unchanged and unused regions. An identical
+target needs no writes or second hash pass.
+
+`--digest-block-mib` selects a power of two from 1 to 1024 (default 64). Smaller
+blocks can reduce unnecessary writes but require more target commands. This
+comparison granularity differs from readback mode's 1 MiB byte comparison.
+Hashing a mismatched range twice adds work when most contents differ; benchmark
+against digest mode without `--skip-unchanged` for substantially older images.
+Without `--skip-unchanged`, digest mode checks command support, writes the full
+image, and verifies the complete image with storage digests.
+
+Progress and the final table show digest comparison, refinement and verification
+times. JSON includes `verification` (`digest` or `readback`) alongside written and
+skipped byte counts. Digest mode needs only small per-worker scratch files instead
+of a full image of target readback data. It still reads source files locally and
+writes raw data over USB; it cannot remove a hub's write-bandwidth limit.
+
+Missing/malformed digests, NAKs, timeouts and mismatches fail the target. Digest
+mode requires a compatible programmer and helper, and does not silently weaken
+verification or change modes after an error. Use `--verification readback` (the
+default), without `--digest-qdl`, for programmers/platforms without digest support.
+Storage digests trust the same supplied programmer used for reading/writing.
+UNO Q hardware support has been tested; VENTUNO Q digest support still needs a
+hardware trial, although both sector sizes and multiple LUNs are covered in tests.
+
 ## What is cloned
 
 This is a byte-for-byte copy of **the selected application-processor storage

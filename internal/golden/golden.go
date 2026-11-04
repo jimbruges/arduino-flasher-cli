@@ -445,6 +445,7 @@ type Result struct {
 	Status          string  `json:"status"`
 	Error           string  `json:"error,omitempty"`
 	DurationSeconds float64 `json:"duration_seconds,omitempty"`
+	Verification    string  `json:"verification,omitempty"`
 	BytesWritten    uint64  `json:"bytes_written,omitempty"`
 	BytesSkipped    uint64  `json:"bytes_skipped,omitempty"`
 }
@@ -460,8 +461,14 @@ type FlashOptions struct {
 	RestoreSource bool
 	// All snapshots connected EDL devices once and excludes the source.
 	All bool
-	// SkipUnchanged reads the target first and writes only differing 1 MiB regions.
+	// SkipUnchanged compares the target first and writes only differing regions.
 	SkipUnchanged bool
+	// Verification selects "readback" (default) or "digest".
+	Verification string
+	// DigestRun is a QDL runner with explicit getsha256digest XML support.
+	DigestRun Run
+	// DigestBlockBytes bounds changed regions; default 64 MiB.
+	DigestBlockBytes uint64
 	// Discover overrides the native USB inventory for embedding and tests.
 	Discover func(context.Context) ([]edl.Device, error)
 	// OnResult runs once per finished target, after QDL and scratch cleanup. Calls
@@ -472,6 +479,21 @@ type FlashOptions struct {
 // Flash uses explicit targets only, rejects the source by default and duplicate serials, and
 // attempts every target even if another fails. Each worker probes before writing.
 func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Result, error) {
+	if opts.Verification == "" {
+		opts.Verification = "readback"
+	}
+	if opts.Verification != "readback" && opts.Verification != "digest" {
+		return nil, errors.New("verification must be readback or digest")
+	}
+	if opts.DigestBlockBytes == 0 {
+		opts.DigestBlockBytes = 64 << 20
+	}
+	if opts.DigestBlockBytes < 1<<20 || opts.DigestBlockBytes > chunkBytes || opts.DigestBlockBytes&(opts.DigestBlockBytes-1) != 0 {
+		return nil, errors.New("digest block size must be a power of two from 1 MiB to 1 GiB")
+	}
+	if opts.Verification == "digest" && opts.DigestRun == nil && !opts.DryRun {
+		return nil, errors.New("digest verification requires a digest-capable QDL runner")
+	}
 	if opts.Jobs < 1 || opts.Jobs > 32 || opts.Timeout <= 0 || (!opts.All && len(opts.Serials) == 0) {
 		return nil, errors.New("provide target serials, jobs 1..32 and a positive timeout")
 	}
@@ -530,7 +552,7 @@ func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Resul
 			return nil, fmt.Errorf("source or duplicate target serial: %s", v)
 		}
 		seen[s] = true
-		results[i] = Result{Serial: s, Status: "planned"}
+		results[i] = Result{Serial: s, Status: "planned", Verification: opts.Verification}
 	}
 	if opts.DryRun {
 		return results, nil
@@ -539,8 +561,17 @@ func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Resul
 	if tempParent == "" {
 		tempParent = os.TempDir()
 	}
-	if err := checkSpace(tempParent, m.LUNs, min(opts.Jobs, len(results))); err != nil {
-		return nil, err
+	if opts.Verification == "readback" {
+		if err := checkSpace(tempParent, m.LUNs, min(opts.Jobs, len(results))); err != nil {
+			return nil, err
+		}
+	}
+	var hashes *imageHashes
+	if opts.Verification == "digest" && opts.SkipUnchanged {
+		hashes, err = prepareImageHashes(ctx, dir, m, opts.DigestBlockBytes)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, r := range results {
 		reportProgress(ctx, Progress{Serial: r.Serial, Phase: "queued"})
@@ -555,7 +586,7 @@ func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Resul
 			for i := range work {
 				started := time.Now()
 				targetCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
-				err := flashOne(targetCtx, run, dir, m, results[i].Serial, opts.TempDir, opts.SkipUnchanged, &results[i])
+				err := flashOne(targetCtx, run, dir, m, results[i].Serial, opts.TempDir, opts, hashes, &results[i])
 				cancel()
 				results[i].DurationSeconds = time.Since(started).Seconds()
 				if err != nil {
@@ -585,7 +616,7 @@ func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Resul
 	}
 	return results, errors.Join(failures...)
 }
-func flashOne(ctx context.Context, run Run, dir string, m Manifest, s, temp string, skipUnchanged bool, result *Result) (retErr error) {
+func flashOne(ctx context.Context, run Run, dir string, m Manifest, s, temp string, opts FlashOptions, hashes *imageHashes, result *Result) (retErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -608,6 +639,10 @@ func flashOne(ctx context.Context, run Run, dir string, m Manifest, s, temp stri
 			return fmt.Errorf("LUN %d geometry differs from source; same-sized storage required", l.Number)
 		}
 	}
+	if opts.Verification == "digest" {
+		return flashDigest(ctx, run, opts.DigestRun, dir, work, loader, m, s, opts.SkipUnchanged, hashes, result)
+	}
+	result.Verification = "readback"
 	var programs, reads []operation
 	var total, written uint64
 	for _, p := range m.Parts {
@@ -615,7 +650,7 @@ func flashOne(ctx context.Context, run Run, dir string, m Manifest, s, temp stri
 		reads = append(reads, operation{XMLName: xml.Name{Local: "read"}, Sector: sectorFor(m, p.LUN), File: p.File, LUN: p.LUN, Count: p.Sectors, Start: p.Start})
 		total += p.Sectors * sectorFor(m, p.LUN)
 	}
-	if skipUnchanged {
+	if opts.SkipUnchanged {
 		compareXML, err := writeXML(work, "compare.xml", reads)
 		if err != nil {
 			return err
@@ -638,7 +673,7 @@ func flashOne(ctx context.Context, run Run, dir string, m Manifest, s, temp stri
 		written += op.Count * op.Sector
 	}
 	result.BytesSkipped = total - written
-	if skipUnchanged {
+	if opts.SkipUnchanged {
 		reportProgress(ctx, Progress{Serial: s, Phase: "comparison result", Total: total, PlannedWrite: written, PlannedSkip: total - written})
 	}
 	if len(programs) == 0 {

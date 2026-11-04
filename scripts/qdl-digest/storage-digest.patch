@@ -1,0 +1,118 @@
+--- a/read.h
++++ b/read.h
+@@ -9,6 +9,7 @@
+ struct qdl_device;
+ 
+ struct read_op {
++	bool digest;
+ 	unsigned int sector_size;
+ 	const char *filename;
+ 	int partition;
+--- a/read.c
++++ b/read.c
+@@ -39,7 +39,8 @@
+ 		if (node->type != XML_ELEMENT_NODE)
+ 			continue;
+ 
+-		if (xmlStrcmp(node->name, (xmlChar *)"read")) {
++		if (xmlStrcmp(node->name, (xmlChar *)"read") &&
++		    xmlStrcmp(node->name, (xmlChar *)"getsha256digest")) {
+ 			ux_err("unrecognized tag \"%s\" in read-type file \"%s\", ignoring\n",
+ 			       node->name, read_op_file);
+ 			continue;
+@@ -48,6 +49,7 @@
+ 		errors = 0;
+ 
+ 		read_op = calloc(1, sizeof(struct read_op));
++		read_op->digest = !xmlStrcmp(node->name, (xmlChar *)"getsha256digest");
+ 
+ 		read_op->sector_size = attr_as_unsigned(node, "SECTOR_SIZE_IN_BYTES", &errors);
+ 		read_op->filename = attr_as_string(node, "filename", &errors);
+@@ -85,7 +87,7 @@
+ 		fd = open(read_op->filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0644);
+ 		if (fd < 0) {
+ 			ux_info("unable to open %s...\n", read_op->filename);
+-			return ret;
++			return -errno;
+ 		}
+ 
+ 		ret = apply(qdl, read_op, fd);
+--- a/qdl.c
++++ b/qdl.c
+@@ -76,7 +76,8 @@
+ 				type = QDL_FILE_PROGRAM;
+ 				break;
+ 			}
+-			if (!xmlStrcmp(node->name, (xmlChar *)"read")) {
++			if (!xmlStrcmp(node->name, (xmlChar *)"read") ||
++		    !xmlStrcmp(node->name, (xmlChar *)"getsha256digest")) {
+ 				type = QDL_FILE_READ;
+ 				break;
+ 			}
+--- a/firehose.c
++++ b/firehose.c
+@@ -626,7 +626,32 @@
+ 
+ 	return ret == FIREHOSE_ACK ? 0 : -1;
+ }
++
++/* Storage digests are distinct from VIP transport digest tables. */
++struct storage_digest {
++    char hex[65];
++    bool invalid;
++};
+ 
++static int firehose_digest_parser(xmlNode *node, void *data, bool *rawmode)
++{
++    struct storage_digest *digest = data;
++    xmlChar *value = xmlGetProp(node, (xmlChar *)"value");
++    if (value && !xmlStrcmp(node->name, (xmlChar *)"log")) {
++        const char *start = strstr((const char *)value, "Digest ");
++        if (start) {
++            start += 7;
++            if (digest->hex[0] || strlen(start) != 64 ||
++                strspn(start, "0123456789abcdefABCDEF") != 64)
++                digest->invalid = true;
++            else
++                memcpy(digest->hex, start, 65);
++        }
++    }
++    xmlFree(value);
++    return firehose_generic_parser(node, NULL, rawmode);
++}
++
+ static int firehose_issue_read(struct qdl_device *qdl, struct read_op *read_op,
+ 			       int fd, void *out_buf, size_t out_len, bool quiet)
+ {
+@@ -653,7 +678,7 @@
+ 
+ 	sector_size = read_op->sector_size ? : qdl->sector_size;
+ 
+-	node = xmlNewChild(root, NULL, (xmlChar *)"read", NULL);
++	node = xmlNewChild(root, NULL, (xmlChar *)(read_op->digest ? "getsha256digest" : "read"), NULL);
+ 	xml_setpropf(node, "SECTOR_SIZE_IN_BYTES", "%d", sector_size);
+ 	xml_setpropf(node, "num_partition_sectors", "%d", read_op->num_sectors);
+ 	xml_setpropf(node, "physical_partition_number", "%d", read_op->partition);
+@@ -670,7 +695,21 @@
+ 		goto out;
+ 	}
+ 
+-	ret = firehose_read(qdl, 10000, firehose_generic_parser, NULL);
++	if (read_op->digest) {
++        struct storage_digest digest = {0};
++        ret = firehose_read(qdl, 300000, firehose_digest_parser, &digest);
++        if (ret || digest.invalid || !digest.hex[0]) {
++            ux_err("storage digest rejected, missing or malformed\n");
++            ret = -1;
++        } else if (write(fd, digest.hex, 64) != 64) {
++            ux_err("failed to write storage digest\n");
++            ret = -1;
++        } else if (!quiet) {
++            ux_info("hashed \"%s\" successfully\n", read_op->filename);
++        }
++        goto out;
++    }
++    ret = firehose_read(qdl, 10000, firehose_generic_parser, NULL);
+ 	if (ret) {
+ 		if (!quiet)
+ 			ux_err("failed to setup reading operation\n");

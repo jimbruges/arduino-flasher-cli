@@ -101,13 +101,21 @@ func progressBytes(n uint64) string {
 func formatProgress(p golden.Progress) string {
 	if p.Phase == "comparison result" {
 		if p.PlannedWrite == 0 {
-			return fmt.Sprintf("[%s] identical: %s verified by pre-read; no writes needed", progressLabel(p), progressBytes(p.Total))
+			method := "pre-read"
+			if p.Verification == "digest" {
+				method = "storage digests"
+			}
+			return fmt.Sprintf("[%s] identical: %s verified by %s; no writes needed", progressLabel(p), progressBytes(p.Total), method)
 		}
 		saved := float64(0)
 		if p.Total > 0 {
 			saved = 100 * float64(p.PlannedSkip) / float64(p.Total)
 		}
-		return fmt.Sprintf("[%s] comparison: write %s; skip %s (%.1f%%); full readback follows", progressLabel(p), progressBytes(p.PlannedWrite), progressBytes(p.PlannedSkip), saved)
+		verification := "full readback"
+		if p.Verification == "digest" {
+			verification = "full storage digest verification"
+		}
+		return fmt.Sprintf("[%s] comparison: write %s; skip %s (%.1f%%); %s follows", progressLabel(p), progressBytes(p.PlannedWrite), progressBytes(p.PlannedSkip), saved, verification)
 	}
 	phase := p.Phase
 	if isWrite(p) {
@@ -186,7 +194,14 @@ func (l *progressLog) summary(results []golden.Result) {
 	}
 	w := tabwriter.NewWriter(l.cmd.ErrOrStderr(), 0, 0, 2, ' ', 0)
 	hasComparison := false
+	hasDigests := false
 	for _, values := range l.timings {
+		if _, ok := values["compare storage digests"]; ok {
+			hasDigests = true
+		}
+		if _, ok := values["verify storage digests"]; ok {
+			hasDigests = true
+		}
 		if _, ok := values["compare contents"]; ok {
 			hasComparison = true
 		}
@@ -194,6 +209,9 @@ func (l *progressLog) summary(results []golden.Result) {
 	header := "SERIAL\tSTATUS\tWRITE\tREADBACK\tCHECKSUM"
 	if hasComparison {
 		header += "\tPRE-READ\tCOMPARE"
+	}
+	if hasDigests {
+		header += "\tDIGEST COMPARE\tREFINE\tDIGEST VERIFY"
 	}
 	fmt.Fprintln(w, header+"\tTOTAL\tWRITTEN\tSKIPPED")
 	for _, r := range results {
@@ -207,6 +225,9 @@ func (l *progressLog) summary(results []golden.Result) {
 		fmt.Fprintf(w, "0x%s\t%s\t%s\t%s\t%s", r.Serial, strings.ToUpper(r.Status), duration("write"), duration("readback"), duration("verify checksums"))
 		if hasComparison {
 			fmt.Fprintf(w, "\t%s\t%s", duration("pre-read"), duration("compare contents"))
+		}
+		if hasDigests {
+			fmt.Fprintf(w, "\t%s\t%s\t%s", duration("compare storage digests"), duration("locate changed ranges"), duration("verify storage digests"))
 		}
 		written, skipped := progressBytes(r.BytesWritten), progressBytes(r.BytesSkipped)
 		if r.Status != "verified" {

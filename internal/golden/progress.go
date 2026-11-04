@@ -15,6 +15,7 @@ import (
 // Callbacks can run concurrently for different targets and must return promptly.
 type Progress struct {
 	Serial, Phase string
+	Verification  string
 	Done, Total   uint64
 	Elapsed       time.Duration
 	// SampleElapsed is the time of the last byte/chunk measurement. It stays

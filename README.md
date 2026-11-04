@@ -78,6 +78,10 @@ Golden images include Linux settings, credentials and device identities, but
 [golden-image guide](docs/golden-images.md) for preparation, storage requirements,
 advanced options and the [UNO Q validation results](docs/unoq-validation.md).
 
+For faster verification on a shared USB hub, golden flashing also supports
+[storage digest comparison and verification](docs/golden-images.md#storage-digest-verification)
+using a locally built QDL helper.
+
 ## Download images
 
 `arduino-flasher-cli download unoq` saves the image archive in the user cache

@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -127,9 +129,29 @@ func NewCommand() *cobra.Command {
 	capture.MarkFlagsMutuallyExclusive("programmer", "os")
 	var opts golden.FlashOptions
 	var yes bool
-	flash := &cobra.Command{Use: "flash IMAGE", Short: "Restore and readback-verify a golden image on explicit EDL targets", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	var digestQDL string
+	var digestBlockMiB uint64
+	flash := &cobra.Command{Use: "flash IMAGE", Short: "Restore and verify a golden image on explicit EDL targets", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !yes && !opts.DryRun {
 			return fmt.Errorf("restoring replaces all selected LUN data; specify --yes to authorize the explicit targets, or --dry-run to inspect")
+		}
+		opts.DigestBlockBytes = digestBlockMiB << 20
+		if digestBlockMiB < 1 || digestBlockMiB > 1024 {
+			return fmt.Errorf("digest block size must be 1..1024 MiB")
+		}
+		if opts.Verification == "digest" && !opts.DryRun {
+			if digestQDL == "" {
+				return fmt.Errorf("digest mode needs --digest-qdl; build it with scripts/qdl-digest/build.sh, or use --verification readback")
+			}
+			resolved, err := exec.LookPath(digestQDL)
+			if err != nil {
+				return fmt.Errorf("digest QDL: %w", err)
+			}
+			resolved, err = filepath.Abs(resolved)
+			if err != nil {
+				return err
+			}
+			opts.DigestRun = golden.CommandRunner(resolved)
 		}
 		started := time.Now()
 		var run golden.Run
@@ -168,13 +190,16 @@ func NewCommand() *cobra.Command {
 		}
 		return err
 	}}
+	flash.Flags().StringVar(&opts.Verification, "verification", "readback", "Full-image verification: readback or digest")
+	flash.Flags().StringVar(&digestQDL, "digest-qdl", "", "Path to QDL with storage digest support (scripts/qdl-digest/build.sh)")
+	flash.Flags().Uint64Var(&digestBlockMiB, "digest-block-mib", 64, "Digest comparison granularity in MiB: power of two, 1..1024")
 	flash.Flags().StringVar(&opts.Board, "board", "", "Target board: must match the bundle")
 	flash.Flags().StringSliceVar(&opts.Serials, "serial", nil, "Explicit target serials; comma-separated or repeated (decimal or 0x-prefixed hex)")
 	flash.Flags().BoolVar(&flashVerbose, "verbose-progress", false, "Show all phases and frequent progress updates")
 	flash.Flags().IntVar(&opts.Jobs, "jobs", 4, "Maximum concurrent boards (1..32)")
-	flash.Flags().StringVar(&opts.TempDir, "temp-dir", "", "Readback directory parent; needs one image worth of free space per active worker")
-	flash.Flags().DurationVar(&opts.Timeout, "timeout", 2*time.Hour, "Timeout per target, including preflight and readback")
-	flash.Flags().BoolVar(&opts.SkipUnchanged, "skip-unchanged", false, "Read targets first; write only differing 1 MiB regions, then verify the full image")
+	flash.Flags().StringVar(&opts.TempDir, "temp-dir", "", "Scratch directory parent; readback mode needs one image worth of space per worker")
+	flash.Flags().DurationVar(&opts.Timeout, "timeout", 2*time.Hour, "Timeout per target, including preflight, writes and verification")
+	flash.Flags().BoolVar(&opts.SkipUnchanged, "skip-unchanged", false, "Compare targets first; write differing regions, then verify the full image")
 	flash.Flags().BoolVar(&opts.All, "all", false, "Snapshot all connected serial-addressable Qualcomm EDL targets, excluding source; board model is not auto-detected")
 	flash.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Verify bundle and target selection without accessing USB")
 	flash.Flags().BoolVar(&opts.RestoreSource, "restore-source", false, "Allow restoring only the original source board (single target; requires --yes)")
