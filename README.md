@@ -49,8 +49,8 @@ arduino-flasher-cli golden devices
 # Check the image and preview targets without writing
 arduino-flasher-cli golden flash ./golden-unoq --board unoq --all --dry-run
 
-# Flash up to four boards concurrently and verify the complete contents
-arduino-flasher-cli golden flash ./golden-unoq --board unoq --all --jobs 4 --yes
+# Flash up to 16 boards concurrently and verify the complete contents
+arduino-flasher-cli golden flash ./golden-unoq --board unoq --all --yes
 ```
 
 `--all` selects connected EDL devices and excludes the captured source. It cannot
@@ -68,19 +68,73 @@ comparison reports how much needs writing and identifies boards already matching
 the image. Add `--verbose-progress` for frequent diagnostic updates.
 Progress goes to stderr; JSON results stay on stdout.
 
-Add `--skip-unchanged` to read targets first and write only differing regions,
-while still verifying the complete image. This can speed up restores when the
-existing contents are similar. Capture needs space for the full raw storage;
-flashing also needs one image's worth of scratch space per active worker.
+Concurrency defaults to **16 boards**; `--jobs` accepts 1–32. Capture needs space
+for the full raw storage. Default readback verification needs one image's worth
+of scratch space per active worker (about 251 GB for 16 UNO Q targets). Digest
+verification uses only small target scratch files.
+
+### Fastest batch settings: storage digests
+
+Digest mode hashes storage on each board and transfers only SHA-256 responses
+for comparison and verification. It still verifies every captured sector. Two
+already-matching UNO Q boards verified concurrently in **2m23s total**, including
+source checks, with no writes needed. This is verification timing, not factory
+flashing time; 16-board throughput has not yet been measured.
+
+Build the helper once on macOS or Linux. Install a C compiler, `make`, `patch`,
+`curl`, Python 3, `pkg-config`, libusb and libxml2. On macOS:
+
+```sh
+brew install pkg-config libusb libxml2
+scripts/qdl-digest/build.sh
+```
+
+From the repository root, use the rebuilt CLI and helper for similar images or
+repeat provisioning:
+
+```sh
+./build/arduino-flasher-cli golden flash ./golden-unoq \
+  --board unoq --all --jobs 16 --skip-unchanged \
+  --verification digest --digest-qdl ./build/qdl-digest \
+  --digest-block-mib 64 --yes
+```
+
+This skips matching ranges, locates changes in 64 MiB blocks, writes differences,
+and verifies the complete image again after any writes. Source block hashes are
+prepared once for the whole batch. An identical board needs no second pass.
+`--jobs 16` and `--digest-block-mib 64` are shown explicitly; both are defaults.
+
+For factory images that differ across most of storage, try a full write with
+digest verification to avoid the comparison passes:
+
+```sh
+./build/arduino-flasher-cli golden flash ./golden-unoq \
+  --board unoq --all --jobs 16 \
+  --verification digest --digest-qdl ./build/qdl-digest --yes
+```
+
+There is no single fastest setting for every factory release. Compare these two
+modes on representative boards. `--digest-block-mib 1024` reduces refinement
+command count but can write an entire 1 GiB range for a small difference; smaller
+blocks save writes at the cost of more hash commands.
+
+For the highest write throughput, distribute boards across independent USB
+controllers. Extra hubs sharing one controller may still share bandwidth. Lower
+`--jobs` if transfers slow down or become unreliable; more workers cannot remove
+a shared USB bandwidth limit. Increasing concurrency above 16 only helps when
+more than 16 targets are connected.
+
+Digest mode requires a compatible programmer; UNO Q has been hardware-tested,
+while VENTUNO Q digest support still needs validation. Use `--verification readback` without the helper as the fallback. Missing digests, command failures
+and mismatches fail verification.
 
 Golden images include Linux settings, credentials and device identities, but
 **do not capture or flash the separate MCU firmware**. See the
 [golden-image guide](docs/golden-images.md) for preparation, storage requirements,
 advanced options and the [UNO Q validation results](docs/unoq-validation.md).
 
-For faster verification on a shared USB hub, golden flashing also supports
-[storage digest comparison and verification](docs/golden-images.md#storage-digest-verification)
-using a locally built QDL helper.
+See the [digest-mode guide](docs/golden-images.md#storage-digest-verification)
+for helper details, verification behavior and platform support.
 
 ## Download images
 

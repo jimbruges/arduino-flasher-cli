@@ -270,6 +270,8 @@ when the shared USB path limits reading.
 
 ## Storage digest verification
 
+Concurrency defaults to 16 targets; use `--jobs` (1–32) to tune your fixture.
+
 For multi-board fixtures, verify storage on each board and transfer only SHA-256
 responses over USB. Build the native helper once (macOS/Linux; see its
 [build requirements](../scripts/qdl-digest/README.md)):
@@ -277,7 +279,7 @@ responses over USB. Build the native helper once (macOS/Linux; see its
 ```sh
 scripts/qdl-digest/build.sh
 ./build/arduino-flasher-cli golden flash ./golden-unoq \
-  --board unoq --all --jobs 4 --skip-unchanged \
+  --board unoq --all --jobs 16 --skip-unchanged \
   --verification digest --digest-qdl ./build/qdl-digest --yes
 ```
 

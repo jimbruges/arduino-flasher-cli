@@ -196,7 +196,7 @@ func NewCommand() *cobra.Command {
 	flash.Flags().StringVar(&opts.Board, "board", "", "Target board: must match the bundle")
 	flash.Flags().StringSliceVar(&opts.Serials, "serial", nil, "Explicit target serials; comma-separated or repeated (decimal or 0x-prefixed hex)")
 	flash.Flags().BoolVar(&flashVerbose, "verbose-progress", false, "Show all phases and frequent progress updates")
-	flash.Flags().IntVar(&opts.Jobs, "jobs", 4, "Maximum concurrent boards (1..32)")
+	flash.Flags().IntVar(&opts.Jobs, "jobs", 16, "Maximum concurrent boards (1..32)")
 	flash.Flags().StringVar(&opts.TempDir, "temp-dir", "", "Scratch directory parent; readback mode needs one image worth of space per worker")
 	flash.Flags().DurationVar(&opts.Timeout, "timeout", 2*time.Hour, "Timeout per target, including preflight, writes and verification")
 	flash.Flags().BoolVar(&opts.SkipUnchanged, "skip-unchanged", false, "Compare targets first; write differing regions, then verify the full image")

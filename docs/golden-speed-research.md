@@ -12,8 +12,8 @@ it is not a measured 16-board result or a prediction of write throughput.
 A single hub shares its upstream bandwidth. More workers cannot create bandwidth.
 Use independent USB host-controller paths where available, and benchmark jobs 1,
 2 and 4 per path. Separate hubs on the same controller can still share bandwidth.
-Current golden jobs default to four; sixteen connected boards therefore run in
-waves unless explicitly increased. Verify negotiated transfer speed during Firehose,
+Golden jobs now default to sixteen, allowing sixteen connected targets to run
+concurrently. Use --jobs to tune concurrency for the USB fixture. Verify negotiated transfer speed during Firehose,
 since initial EDL enumeration alone does not establish transfer speed.
 
 ## Download size versus USB writes
