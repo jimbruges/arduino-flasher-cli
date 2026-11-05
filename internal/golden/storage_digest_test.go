@@ -30,143 +30,195 @@ func largeDigestFixture(t *testing.T) (string, *fakeDevice) {
 }
 
 func TestDigestFlashCompleteCoverage(t *testing.T) {
-	for _, mode := range []string{"identical", "partial", "coalesced", "full", "collateral"} {
-		t.Run(mode, func(t *testing.T) {
-			dir, f := largeDigestFixture(t)
-			if mode == "partial" || mode == "coalesced" || mode == "collateral" {
-				f.disks["00000002"][0][1<<20] ^= 1
-			}
-			if mode == "coalesced" {
-				f.disks["00000002"][0][2<<20] ^= 1
-			}
-			opts := options("unoq", "2")
-			opts.Verification = "digest"
-			opts.DigestBlockBytes = 1 << 20
-			opts.DigestRun = f.run
-			opts.SkipUnchanged = mode != "full"
-			write := f.run
-			if mode == "collateral" {
-				write = func(ctx context.Context, work, s, storage, loader string, paths ...string) error {
-					if err := f.run(ctx, work, s, storage, loader, paths...); err != nil {
-						return err
-					}
+	for _, comparison := range []string{"hierarchical", "blocks"} {
+		for _, mode := range []string{"identical", "partial", "coalesced", "full", "collateral"} {
+			t.Run(comparison+"/"+mode, func(t *testing.T) {
+				dir, f := largeDigestFixture(t)
+				if mode == "partial" || mode == "coalesced" || mode == "collateral" {
+					f.disks["00000002"][0][1<<20] ^= 1
+				}
+				if mode == "coalesced" {
+					f.disks["00000002"][0][2<<20] ^= 1
+				}
+				opts := options("unoq", "2")
+				opts.Verification = "digest"
+				opts.DigestBlockBytes = 1 << 20
+				opts.DigestComparison = comparison
+				if mode == "full" {
+					opts.DigestComparison = "hierarchical"
+				}
+				var digestCalls []string
+				opts.DigestRun = func(ctx context.Context, work, serial, storage, loader string, paths ...string) error {
 					for _, p := range paths {
-						if filepath.Base(p) == "restore.xml" {
-							f.disks[s][0][3<<20] ^= 1
-						}
+						digestCalls = append(digestCalls, filepath.Base(p))
 					}
-					return nil
+					return f.run(ctx, work, serial, storage, loader, paths...)
 				}
-			}
-			results, err := Flash(context.Background(), write, dir, opts)
-			if mode == "collateral" {
-				if err == nil || results[0].Status != "failed" {
-					t.Fatal("collateral corruption passed")
+				opts.SkipUnchanged = mode != "full"
+				write := f.run
+				if mode == "collateral" {
+					write = func(ctx context.Context, work, s, storage, loader string, paths ...string) error {
+						if err := f.run(ctx, work, s, storage, loader, paths...); err != nil {
+							return err
+						}
+						for _, p := range paths {
+							if filepath.Base(p) == "restore.xml" {
+								f.disks[s][0][3<<20] ^= 1
+							}
+						}
+						return nil
+					}
 				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			r := results[0]
-			want := uint64(0)
-			if mode == "partial" {
-				want = 1 << 20
-			}
-			if mode == "coalesced" {
-				want = 2 << 20
-			}
-			if mode == "full" {
-				want = 4 << 20
-			}
-			if r.Status != "verified" || r.Verification != "digest" || r.BytesWritten != want || r.BytesSkipped != 4<<20-want {
-				t.Fatal(r)
-			}
-			if want > 0 && f.writes != 1 {
-				t.Fatalf("expected one coalesced write, got %d", f.writes)
-			}
-			if !bytes.Equal(f.disks["00000001"][0], f.disks["00000002"][0]) {
-				t.Fatal("target differs")
-			}
-		})
+				results, err := Flash(context.Background(), write, dir, opts)
+				if mode == "collateral" {
+					if err == nil || results[0].Status != "failed" {
+						t.Fatal("collateral corruption passed")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if comparison == "blocks" && mode != "full" {
+					expectedCalls := 2
+					if mode == "identical" {
+						expectedCalls = 1
+					}
+					if len(digestCalls) != expectedCalls || digestCalls[0] != "digest-compare.xml" {
+						t.Fatalf("unexpected block comparison calls: %v", digestCalls)
+					}
+					if expectedCalls == 2 && digestCalls[1] != "digest-verify.xml" {
+						t.Fatalf("missing full final verification: %v", digestCalls)
+					}
+				}
+				r := results[0]
+				want := uint64(0)
+				if mode == "partial" {
+					want = 1 << 20
+				}
+				if mode == "coalesced" {
+					want = 2 << 20
+				}
+				if mode == "full" {
+					want = 4 << 20
+				}
+				if r.Status != "verified" || r.Verification != "digest" || r.BytesWritten != want || r.BytesSkipped != 4<<20-want {
+					t.Fatal(r)
+				}
+				if want > 0 && f.writes != 1 {
+					t.Fatalf("expected one coalesced write, got %d", f.writes)
+				}
+				if !bytes.Equal(f.disks["00000001"][0], f.disks["00000002"][0]) {
+					t.Fatal("target differs")
+				}
+			})
+		}
 	}
 }
 
 func TestDigestRejectsResponsesBeforeWriting(t *testing.T) {
-	for _, value := range []string{"missing", "short", "invalid", "long", "nak", "cancelled"} {
-		t.Run(value, func(t *testing.T) {
-			dir, f := largeDigestFixture(t)
-			opts := options("unoq", "2")
-			opts.Verification = "digest"
-			opts.DigestRun = func(ctx context.Context, work, s, storage, loader string, paths ...string) error {
-				if value == "nak" {
-					return errors.New("NAK")
-				}
-				if value == "cancelled" {
-					return context.Canceled
-				}
-				data, err := os.ReadFile(paths[0])
-				if err != nil {
-					return err
-				}
-				var doc struct {
-					Ops []operation `xml:",any"`
-				}
-				if err = xml.Unmarshal(data, &doc); err != nil {
-					return err
-				}
-				for _, op := range doc.Ops {
-					if value == "missing" {
-						continue
+	for _, comparison := range []string{"hierarchical", "blocks"} {
+		for _, value := range []string{"missing", "short", "invalid", "long", "nak", "cancelled"} {
+			t.Run(comparison+"/"+value, func(t *testing.T) {
+				dir, f := largeDigestFixture(t)
+				opts := options("unoq", "2")
+				opts.Verification = "digest"
+				opts.SkipUnchanged = true
+				opts.DigestComparison = comparison
+				opts.DigestBlockBytes = 1 << 20
+				opts.DigestRun = func(ctx context.Context, work, s, storage, loader string, paths ...string) error {
+					if value == "nak" {
+						return errors.New("NAK")
 					}
-					text := strings.Repeat("a", 64)
-					switch value {
-					case "short":
-						text = text[:63]
-					case "invalid":
-						text = "z" + text[1:]
-					case "long":
-						text += "a"
+					if value == "cancelled" {
+						return context.Canceled
 					}
-					if err = os.WriteFile(filepath.Join(work, op.File), []byte(text), 0600); err != nil {
+					data, err := os.ReadFile(paths[0])
+					if err != nil {
 						return err
 					}
+					var doc struct {
+						Ops []operation `xml:",any"`
+					}
+					if err = xml.Unmarshal(data, &doc); err != nil {
+						return err
+					}
+					for _, op := range doc.Ops {
+						if value == "missing" {
+							continue
+						}
+						text := strings.Repeat("a", 64)
+						switch value {
+						case "short":
+							text = text[:63]
+						case "invalid":
+							text = "z" + text[1:]
+						case "long":
+							text += "a"
+						}
+						if err = os.WriteFile(filepath.Join(work, op.File), []byte(text), 0600); err != nil {
+							return err
+						}
+					}
+					return nil
 				}
-				return nil
-			}
-			r, err := Flash(context.Background(), f.run, dir, opts)
-			if err == nil || r[0].Status != "failed" || f.writes != 0 {
-				t.Fatalf("accepted %s: %v %v writes=%d", value, r, err, f.writes)
-			}
-		})
+				r, err := Flash(context.Background(), f.run, dir, opts)
+				if err == nil || r[0].Status != "failed" || f.writes != 0 {
+					t.Fatalf("accepted %s: %v %v writes=%d", value, r, err, f.writes)
+				}
+			})
+		}
 	}
 }
 
 func TestDigestConcurrentMultipleLUNs(t *testing.T) {
-	for _, v := range []struct {
-		board  string
-		sector uint64
-	}{{"unoq", 512}, {"ventunoq", 4096}} {
-		t.Run(v.board, func(t *testing.T) {
-			dir, f := fixture(t, v.board, v.sector)
-			for _, s := range []string{"00000002", "00000003"} {
-				f.disks[s] = map[int][]byte{0: append([]byte(nil), f.disks["00000001"][0]...), 1: make([]byte, len(f.disks["00000001"][1]))}
-			}
-			opts := options(v.board, "2", "3")
-			opts.SkipUnchanged = true
-			opts.Verification = "digest"
-			opts.DigestRun = f.run
-			r, err := Flash(context.Background(), f.run, dir, opts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, result := range r {
-				for lun, want := range f.disks["00000001"] {
-					if !bytes.Equal(want, f.disks[result.Serial][lun]) {
-						t.Fatal("LUN differs")
+	for _, comparison := range []string{"hierarchical", "blocks"} {
+		for _, v := range []struct {
+			board  string
+			sector uint64
+		}{{"unoq", 512}, {"ventunoq", 4096}} {
+			t.Run(comparison+"/"+v.board, func(t *testing.T) {
+				dir, f := fixture(t, v.board, v.sector)
+				for _, s := range []string{"00000002", "00000003"} {
+					f.disks[s] = map[int][]byte{0: append([]byte(nil), f.disks["00000001"][0]...), 1: make([]byte, len(f.disks["00000001"][1]))}
+				}
+				opts := options(v.board, "2", "3")
+				opts.SkipUnchanged = true
+				opts.DigestComparison = comparison
+				opts.Verification = "digest"
+				opts.DigestRun = f.run
+				r, err := Flash(context.Background(), f.run, dir, opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, result := range r {
+					for lun, want := range f.disks["00000001"] {
+						if !bytes.Equal(want, f.disks[result.Serial][lun]) {
+							t.Fatal("LUN differs")
+						}
 					}
 				}
-			}
-		})
+			})
+		}
+	}
+}
+
+func TestDigestComparisonValidation(t *testing.T) {
+	for _, tc := range []struct {
+		comparison, verification string
+		skip                     bool
+	}{
+		{"unknown", "digest", true},
+		{"blocks", "readback", true},
+		{"blocks", "digest", false},
+	} {
+		opts := options("unoq", "2")
+		opts.DigestComparison, opts.Verification, opts.SkipUnchanged = tc.comparison, tc.verification, tc.skip
+		called := false
+		run := func(context.Context, string, string, string, string, ...string) error { called = true; return nil }
+		opts.DigestRun = run
+		if _, err := Flash(context.Background(), run, t.TempDir(), opts); err == nil || called {
+			t.Fatalf("accepted invalid comparison options or accessed USB: %+v, %v", tc, err)
+		}
 	}
 }

@@ -161,6 +161,10 @@ type plistNode struct {
 }
 
 func darwinDevices(data []byte) ([]usbDevice, error) {
+	// ioreg emits no plist when no IOUSBHostDevice objects are present.
+	if len(bytes.TrimSpace(data)) == 0 {
+		return []usbDevice{}, nil
+	}
 	var root plistNode
 	if err := xml.Unmarshal(data, &root); err != nil {
 		return nil, err

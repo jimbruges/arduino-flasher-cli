@@ -193,6 +193,7 @@ func NewCommand() *cobra.Command {
 	flash.Flags().StringVar(&opts.Verification, "verification", "readback", "Full-image verification: readback or digest")
 	flash.Flags().StringVar(&digestQDL, "digest-qdl", "", "Path to QDL with storage digest support (scripts/qdl-digest/build.sh)")
 	flash.Flags().Uint64Var(&digestBlockMiB, "digest-block-mib", 64, "Digest comparison granularity in MiB: power of two, 1..1024")
+	flash.Flags().StringVar(&opts.DigestComparison, "digest-comparison", "hierarchical", "With skip-unchanged and digest verification: hierarchical or blocks (single comparison pass)")
 	flash.Flags().StringVar(&opts.Board, "board", "", "Target board: must match the bundle")
 	flash.Flags().StringSliceVar(&opts.Serials, "serial", nil, "Explicit target serials; comma-separated or repeated (decimal or 0x-prefixed hex)")
 	flash.Flags().BoolVar(&flashVerbose, "verbose-progress", false, "Show all phases and frequent progress updates")

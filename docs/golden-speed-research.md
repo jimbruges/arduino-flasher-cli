@@ -90,13 +90,15 @@ digests matched the source for both ranges. These checks exercised actual writes
 and storage digest verification without changing target contents. Actual changed-
 range selection/coalescing and complete final verification after partial/full writes
 are exercised by byte-addressed device tests, including corruption outside writes.
-A factory-board partial-write batch and 16-board throughput remain to be measured.
+A single box-fresh VENTUNO Q partial restore has since passed; a factory-board
+batch and 16-board throughput remain to be measured.
 
 The full Go race suite and vet passed. Native parser tests reject malformed,
 duplicate and missing digests and preserve ACK/NAK handling. Platform/board limits
-are documented: the helper is built locally on macOS/Linux; VENTUNO Q storage
-digest hardware support has not yet been established. Golden cloning covers AP
-storage, not MCU firmware.
+are documented: the helper is built locally on macOS/Linux. VENTUNO Q partial
+restore and complete final digest verification passed on both selected LUNs;
+see [VENTUNO Q validation](ventunoq-validation.md). Post-restore boot remains
+untested. Golden cloning covers AP storage, not MCU firmware.
 
 References: [QDL v2.4](https://github.com/linux-msm/qdl/tree/v2.4),
 [Firehose digest command](https://github.com/bkerler/edl/blob/master/edlclient/Library/firehose.py).

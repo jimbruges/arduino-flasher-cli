@@ -36,6 +36,20 @@ func TestAddressable(t *testing.T) {
 		t.Fatal("accepted ambiguous serial")
 	}
 }
+
+func TestDarwinEmptyInventory(t *testing.T) {
+	for _, data := range [][]byte{nil, {}, []byte(" \n")} {
+		candidates, err := darwinDevices(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		devices, err := addressable(candidates)
+		if err != nil || len(devices) != 0 {
+			t.Fatalf("%v %v", devices, err)
+		}
+	}
+}
+
 func TestDarwinInventory(t *testing.T) {
 	// Mirrors ioreg's plist shape, including nested children and irrelevant binary data.
 	data := []byte(`<?xml version="1.0"?><plist version="1.0"><array><dict>

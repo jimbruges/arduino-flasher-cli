@@ -104,6 +104,13 @@ and verifies the complete image again after any writes. Source block hashes are
 prepared once for the whole batch. An identical board needs no second pass.
 `--jobs 16` and `--digest-block-mib 64` are shown explicitly; both are defaults.
 
+For partial writes when differences are spread across most image chunks, add
+`--digest-comparison blocks`. This compares each 64 MiB block directly in one
+pass, avoiding the initial 1 GiB comparison followed by refinement. It still
+verifies all selected storage after any writes. The default `hierarchical`
+strategy uses fewer digest requests on identical or lightly changed boards.
+`blocks` requires both `--skip-unchanged` and `--verification digest`.
+
 For factory images that differ across most of storage, try a full write with
 digest verification to avoid the comparison passes:
 
@@ -118,15 +125,50 @@ modes on representative boards. `--digest-block-mib 1024` reduces refinement
 command count but can write an entire 1 GiB range for a small difference; smaller
 blocks save writes at the cost of more hash commands.
 
+For a single VENTUNO Q, the tested **full write with digest verification** took
+**36m47s**, versus **45m46s** for the preceding factory-board skip-mode restore
+(8m59s less, about 20%). Skip mode spent 14m08s comparing/refining to avoid only
+8.72 GiB of writes. The full repeat wrote all 59.31 GiB to the same already-restored
+target, so these are observations on different starting contents, not a controlled
+factory comparison. This result does not establish the fastest multi-board mode.
+
+```sh
+./build/arduino-flasher-cli golden flash ./golden-ventunoq \
+  --board ventunoq --all --jobs 16 --timeout 3h \
+  --verification digest --digest-qdl ./build/qdl-digest --yes
+```
+
+The command above runs a full-write batch for comparison.
+
+For many factory VENTUNO Q boards sharing a USB 2 hub uplink, benchmark **single-pass
+block comparison** first. It saves transfer bandwidth while hashing on each target:
+
+```sh
+./build/arduino-flasher-cli golden flash ./golden-ventunoq \
+  --board ventunoq --all --jobs 16 --timeout 3h --skip-unchanged \
+  --verification digest --digest-qdl ./build/qdl-digest \
+  --digest-comparison blocks --digest-block-mib 64 --yes
+```
+
+If 16 boards have the same matching ranges as the tested factory target, full
+writes transfer about **949 GiB**, while partial writes transfer **809.5 GiB**,
+saving **139.5 GiB**. At a hypothetical shared aggregate rate of 32 MiB/s, that
+avoids about **74 minutes of writes**; this is arithmetic, not a 16-board benchmark.
+Target comparison work can overlap across workers, so its cost does not simply
+multiply by 16. On independent USB uplinks or targets with almost no matching
+regions, full-write mode may still win. Measure both modes on the intended batch
+topology; single-pass factory partial writes and 16-board throughput remain untested.
+
 For the highest write throughput, distribute boards across independent USB
 controllers. Extra hubs sharing one controller may still share bandwidth. Lower
 `--jobs` if transfers slow down or become unreliable; more workers cannot remove
 a shared USB bandwidth limit. Increasing concurrency above 16 only helps when
 more than 16 targets are connected.
 
-Digest mode requires a compatible programmer; UNO Q has been hardware-tested,
-while VENTUNO Q digest support still needs validation. Use `--verification readback` without the helper as the fallback. Missing digests, command failures
-and mismatches fail verification.
+Digest mode requires a compatible programmer. UNO Q and VENTUNO Q digest flashing
+have been hardware-tested, including complete final storage verification.
+Use `--verification readback` without the helper as the fallback. Missing digests, command failures and
+mismatches fail verification.
 
 Golden images include Linux settings, credentials and device identities, but
 **do not capture or flash the separate MCU firmware**. See the
@@ -135,6 +177,89 @@ advanced options and the [UNO Q validation results](docs/unoq-validation.md).
 
 See the [digest-mode guide](docs/golden-images.md#storage-digest-verification)
 for helper details, verification behavior and platform support.
+
+### Hardware test results
+
+Recorded on **4–5 November 2026**, using macOS arm64. UNO Q images cover
+15,675,162,624 bytes (14.60 GiB) per board; the tested VENTUNO Q covers
+63,685,787,648 bytes (59.31 GiB) across LUNs 0 and 1. All completed capture/flash tests
+below passed; timing varies with target contents and the USB connection.
+Three-board batches are user-reported transcripts; the other measurements were
+run locally. Different boards/images were used between batches, so these are
+observations rather than controlled speed comparisons.
+
+| Test | Boards | Whole capture/batch time | Outcome |
+| --- | ---: | ---: | --- |
+| VENTUNO Q complete capture (`80796883`, USB 2) | 1 | **28m53s** | 59.31 GiB saved; all bundle checksums and both GPTs validated |
+| VENTUNO Q box-fresh partial restore, digest mode (`868C69F1`, USB 2, 5 November) | 1 | **45m46s** | Verified all 59.31 GiB; wrote 50.59 GiB, skipped 8.72 GiB (14.7%); boot not checked |
+| VENTUNO Q full-write repeat, digest mode (`868C69F1`, same USB 2 path) | 1 | **36m47s** | All 59.31 GiB written and verified; 8m59s less than preceding skip-mode restore; target already restored |
+| VENTUNO Q single-pass block comparison, matching target (`868C69F1`, USB 2) | 1 | **7m18s** | All 59.31 GiB matched in one 64 MiB block comparison pass (6m28s); zero writes, no refinement or second hash pass |
+| VENTUNO Q direct USB cable, read-only transport check (`868C69F1`) | 1 | **4.001s** including startup | 1 MiB digest and 64 MiB read matched; no hubs in path, but still USB 2 before/after Firehose; no USB 3 speedup demonstrated |
+| VENTUNO Q digest restore attempt (`868C69F1`, 5 November) | 1 | Probe stopped after 58.4s | Target disappeared before QDL opened it; source checksums and block digest preparation passed (24s each); no storage writes or target verification |
+| UNO Q complete capture | 1 | 2m44s | Full image saved with checksums; repeated capture matched |
+| UNO Q full restore + complete readback | 1 | 16m31s | Every captured sector matched; 14.60 GiB written |
+| UNO Q capture + verified restore | 1 | 19m15s | End-to-end storage round trip passed |
+| UNO Q partial restore after Linux boot, readback mode | 1 | 4m43s | 168 MiB written; 98.88% skipped; full final readback passed |
+| UNO Q full writes on one hub, readback mode | 3 | 36m08s | Three verified; each wrote 14.60 GiB |
+| UNO Q partial writes on one hub, readback mode | 3 | 34m29s | Three verified; combined writes 7.58 GiB, 82.68% less than three full writes |
+| UNO Q complete storage digests, research helper | 2 | About 2m06s concurrently | All 15 manifest ranges matched on both boards; no writes |
+| UNO Q identical targets, integrated digest mode | 2 | 2m23s | Both verified in about 2m12s each; zero writes |
+| UNO Q `golden-unoq-llm`, partial writes + digest verification | 2 | **16m09s** | Both verified; each wrote 10.85 GiB and skipped 3.75 GiB (25.7%) |
+
+Per-target results for the concurrent flashing batches:
+
+| Batch / serial | Initial compare | Refine / local compare | Write | Final verification | Worker total | Written / skipped |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Full readback / `8ED963AB` | — | — | 15m07s | 15m52s readback + 6s checksums | 31m08s | 14.60 GiB / 0 B |
+| Full readback / `C2B2F977` | — | — | 19m56s | 15m49s readback + 6s checksums | 35m53s | 14.60 GiB / 0 B |
+| Full readback / `4A712118` | — | — | 20m30s | 15m25s readback + 6s checksums | 36m03s | 14.60 GiB / 0 B |
+| Partial readback / `C2B2F977` | 17m47s pre-read | 3s | — | Verified by pre-read | 17m52s | 0 B / 14.60 GiB |
+| Partial readback / `8ED963AB` | 17m48s pre-read | 3s | 13s | 11m00s readback + 6s checksums | 29m12s | 102 MiB / 99.32% |
+| Partial readback / `7FE12D45` | 17m59s pre-read | 3s | 7m41s | 8m33s readback + 6s checksums | 34m23s | 7.48 GiB / 48.73% |
+| Identical digest / `8ED963AB` | 2m09s | — | — | Verified by initial digests | 2m12s | 0 B / 14.60 GiB |
+| Identical digest / `C2B2F977` | 2m09s | — | — | Verified by initial digests | 2m12s | 0 B / 14.60 GiB |
+| LLM digest / `8ED963AB` | 2m10s | 2m23s | 9m13s | 2m09s complete digests | 15m57s | 10.85 GiB / 3.75 GiB |
+| LLM digest / `C2B2F977` | 2m09s | 2m22s | 9m00s | 2m09s complete digests | 15m43s | 10.85 GiB / 3.75 GiB |
+
+Worker totals include probing and setup; batch totals also include shared source
+validation and block-hash preparation. Phase timings are rounded and may not sum
+exactly. Initial comparison verification applies only to targets needing no writes;
+all written targets received complete final verification.
+
+Additional validation passed:
+
+- UNO Q normal boot after the initial full restore: **30.403s**, Debian 13.2,
+  no failed systemd units, root and `/home/arduino` mounted read/write.
+- Primary/backup GPT CRCs and partition bounds; repeated capture equality.
+- Target storage SHA-256 matched source for 1 MiB, 64 MiB and 1 GiB ranges.
+  The combined 64 MiB + 1 GiB research invocation took **10.67s**.
+- Two same-byte 1 MiB hardware writes followed by matching storage digests,
+  including a nonzero source-file offset. Target contents were preserved.
+- VENTUNO Q complete bundle checksums, both LUNs’ primary/backup GPT CRCs and
+  partition bounds, and read-only digest samples passed. Phase timings and USB
+  transport checks are recorded in the [VENTUNO Q validation report](docs/ventunoq-validation.md).
+- Full Go race suite and `go vet`; byte-addressed device tests cover full/partial
+  writes, coalescing, multiple LUNs, both sector sizes, concurrency, cancellation,
+  malformed/missing digests and corruption outside the written ranges.
+- Native QDL digest parser tests cover valid hashes, ACK/NAK, duplicates and
+  malformed/missing responses. Compact logger replay reduced 1,255 synthetic
+  progress events to 180 lines (86% fewer).
+
+Post-flash boot was only checked for the initial single-board full restore.
+These tests cover AP storage, not MCU firmware. Sixteen-board throughput remains
+untested. VENTUNO Q capture and digest restore passed; post-restore boot has not
+been tested.
+Detailed records: [single-board tests](docs/unoq-validation.md),
+[three-board batches](docs/unoq-three-board-validation.md),
+[digest research and validation](docs/golden-speed-research.md), and
+[VENTUNO Q capture and restore validation](docs/ventunoq-validation.md).
+Local raw logs and JSON are retained under `build/`, including
+`golden-unoq-llm-flash-progress.log`, `golden-unoq-llm-flash-results.json`,
+`ventunoq-capture-progress.log`, `ventunoq-validation/results.json`,
+`ventunoq-restore-progress.log`, `ventunoq-restore-results.json`,
+`ventunoq-full-digest-progress.log`, `ventunoq-full-digest-results.json`,
+`ventunoq-block-comparison-progress.log` and `ventunoq-block-comparison-results.json`;
+these artifacts and captured images are excluded from commits.
 
 ## Download images
 

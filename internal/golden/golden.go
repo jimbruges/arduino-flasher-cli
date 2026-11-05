@@ -469,6 +469,8 @@ type FlashOptions struct {
 	DigestRun Run
 	// DigestBlockBytes bounds changed regions; default 64 MiB.
 	DigestBlockBytes uint64
+	// DigestComparison selects hierarchical (default) or direct block comparison.
+	DigestComparison string
 	// Discover overrides the native USB inventory for embedding and tests.
 	Discover func(context.Context) ([]edl.Device, error)
 	// OnResult runs once per finished target, after QDL and scratch cleanup. Calls
@@ -484,6 +486,15 @@ func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Resul
 	}
 	if opts.Verification != "readback" && opts.Verification != "digest" {
 		return nil, errors.New("verification must be readback or digest")
+	}
+	if opts.DigestComparison == "" {
+		opts.DigestComparison = "hierarchical"
+	}
+	if opts.DigestComparison != "hierarchical" && opts.DigestComparison != "blocks" {
+		return nil, errors.New("digest comparison must be hierarchical or blocks")
+	}
+	if opts.DigestComparison == "blocks" && (opts.Verification != "digest" || !opts.SkipUnchanged) {
+		return nil, errors.New("block comparison requires skip-unchanged and digest verification")
 	}
 	if opts.DigestBlockBytes == 0 {
 		opts.DigestBlockBytes = 64 << 20
@@ -640,7 +651,7 @@ func flashOne(ctx context.Context, run Run, dir string, m Manifest, s, temp stri
 		}
 	}
 	if opts.Verification == "digest" {
-		return flashDigest(ctx, run, opts.DigestRun, dir, work, loader, m, s, opts.SkipUnchanged, hashes, result)
+		return flashDigest(ctx, run, opts.DigestRun, dir, work, loader, m, s, opts.SkipUnchanged, opts.DigestComparison, hashes, result)
 	}
 	result.Verification = "readback"
 	var programs, reads []operation

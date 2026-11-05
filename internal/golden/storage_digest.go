@@ -122,24 +122,34 @@ func queryStorageDigests(ctx context.Context, run Run, work, serial, storage, lo
 	return values, nil
 }
 
-func flashDigest(ctx context.Context, writeRun, hashRun Run, dir, work, loader string, m Manifest, serial string, skip bool, hashes *imageHashes, result *Result) error {
+func flashDigest(ctx context.Context, writeRun, hashRun Run, dir, work, loader string, m Manifest, serial string, skip bool, comparison string, hashes *imageHashes, result *Result) error {
 	coarse := coarseDigests(dir, m)
 	var programs []operation
 	var written uint64
 	total := manifestBytes(m)
 	if skip {
-		values, err := queryStorageDigests(ctx, hashRun, work, serial, m.Storage, loader, "digest-compare", coarse)
-		if err != nil {
-			return err
-		}
 		var fine []digestRange
-		for i, r := range coarse {
-			if values[i] != r.expected {
-				fine = append(fine, hashes.fine[i]...)
+		phase := "digest-refine"
+		if comparison == "blocks" {
+			// Hash each selected block once, avoiding a coarse pass over data
+			// that is likely to differ. Complete final verification remains mandatory.
+			phase = "digest-compare"
+			for _, ranges := range hashes.fine {
+				fine = append(fine, ranges...)
+			}
+		} else {
+			values, err := queryStorageDigests(ctx, hashRun, work, serial, m.Storage, loader, "digest-compare", coarse)
+			if err != nil {
+				return err
+			}
+			for i, r := range coarse {
+				if values[i] != r.expected {
+					fine = append(fine, hashes.fine[i]...)
+				}
 			}
 		}
 		if len(fine) > 0 {
-			values, err = queryStorageDigests(ctx, hashRun, work, serial, m.Storage, loader, "digest-refine", fine)
+			values, err := queryStorageDigests(ctx, hashRun, work, serial, m.Storage, loader, phase, fine)
 			if err != nil {
 				return err
 			}
@@ -184,7 +194,7 @@ func flashDigest(ctx context.Context, writeRun, hashRun Run, dir, work, loader s
 	}
 	if len(programs) == 0 {
 		return nil
-	} // Coarse digests verified the complete image.
+	} // Comparison digests verified the complete image.
 	path, err := writeXML(work, "restore.xml", programs)
 	if err != nil {
 		return err

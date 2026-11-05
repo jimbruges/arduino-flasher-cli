@@ -310,8 +310,23 @@ mode requires a compatible programmer and helper, and does not silently weaken
 verification or change modes after an error. Use `--verification readback` (the
 default), without `--digest-qdl`, for programmers/platforms without digest support.
 Storage digests trust the same supplied programmer used for reading/writing.
-UNO Q hardware support has been tested; VENTUNO Q digest support still needs a
-hardware trial, although both sector sizes and multiple LUNs are covered in tests.
+
+With `--skip-unchanged --verification digest`, `--digest-comparison blocks`
+compares the entire image directly at `--digest-block-mib` granularity. It hashes
+each target block once during comparison, instead of first comparing large image
+chunks and then refining their differences. Adjacent changed blocks are coalesced
+within source files, and complete final storage verification remains mandatory
+after any writes. The default `hierarchical` comparison is preferable for already
+matching targets or changes confined to a few image chunks, because it uses fewer
+digest requests. Direct block comparison rejects use without skip mode and digest
+verification. An unchanged target is verified by the complete comparison pass;
+it needs no write or second verification pass.
+
+UNO Q and VENTUNO Q digest flashing have been hardware-tested. VENTUNO Q capture,
+partial restore to a box-fresh board and complete final target digest verification
+passed on both selected LUNs; see [validation results](ventunoq-validation.md).
+Post-restore VENTUNO Q boot remains untested. Both sector sizes and multiple LUNs
+are covered in tests.
 
 ## What is cloned
 

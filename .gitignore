@@ -5,3 +5,7 @@
 build/
 
 .bin/
+
+# Local captured golden images and macOS metadata
+/golden-*/
+.DS_Store
