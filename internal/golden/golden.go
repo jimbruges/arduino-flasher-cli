@@ -457,7 +457,7 @@ type FlashOptions struct {
 	Timeout time.Duration
 	// DryRun validates and reports the plan without opening USB devices.
 	DryRun bool
-	// RestoreSource permits restoring only the source board, as a single-target recovery.
+	// RestoreSource permits including the source board in an explicit target list.
 	RestoreSource bool
 	// All snapshots connected EDL devices once and excludes the source.
 	All bool
@@ -511,9 +511,6 @@ func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Resul
 	if opts.All && (len(opts.Serials) > 0 || opts.RestoreSource) {
 		return nil, errors.New("--all cannot be combined with --serial or --restore-source")
 	}
-	if opts.RestoreSource && len(opts.Serials) != 1 {
-		return nil, errors.New("source recovery requires exactly one target")
-	}
 	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -555,9 +552,6 @@ func Flash(ctx context.Context, run Run, dir string, opts FlashOptions) ([]Resul
 		s, err := NormalizeSerial(v)
 		if err != nil {
 			return nil, err
-		}
-		if opts.RestoreSource && s != m.Source {
-			return nil, errors.New("source recovery target must match the image source")
 		}
 		if (s == m.Source && !opts.RestoreSource) || seen[s] {
 			return nil, fmt.Errorf("source or duplicate target serial: %s", v)

@@ -203,7 +203,7 @@ func NewCommand() *cobra.Command {
 	flash.Flags().BoolVar(&opts.SkipUnchanged, "skip-unchanged", false, "Compare targets first; write differing regions, then verify the full image")
 	flash.Flags().BoolVar(&opts.All, "all", false, "Snapshot all connected serial-addressable Qualcomm EDL targets, excluding source; board model is not auto-detected")
 	flash.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Verify bundle and target selection without accessing USB")
-	flash.Flags().BoolVar(&opts.RestoreSource, "restore-source", false, "Allow restoring only the original source board (single target; requires --yes)")
+	flash.Flags().BoolVar(&opts.RestoreSource, "restore-source", false, "Allow including the original source board in explicit targets (requires --yes)")
 	flash.Flags().BoolVarP(&yes, "yes", "y", false, "Authorize replacing data on all explicit targets")
 	_ = flash.MarkFlagRequired("board")
 	flash.MarkFlagsOneRequired("serial", "all")

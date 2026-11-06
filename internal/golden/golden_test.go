@@ -372,10 +372,10 @@ func TestQDLCompatibility(t *testing.T) {
 	}
 }
 
-func TestSourceRecoveryIsExplicitAndSingleTarget(t *testing.T) {
+func TestSourceRecoveryIsExplicit(t *testing.T) {
 	dir, f := fixture(t, "unoq", 512)
 	initial := f.calls
-	for _, targets := range [][]string{{"1", "2"}, {"2"}, {"1", "0x1"}} {
+	for _, targets := range [][]string{{"1", "0x1"}} {
 		opts := options("unoq", targets...)
 		opts.RestoreSource = true
 		if _, err := Flash(context.Background(), f.run, dir, opts); err == nil {
@@ -569,5 +569,19 @@ func TestCompletionNotificationDoesNotWaitForBatch(t *testing.T) {
 	r := <-completed
 	if r.Serial != "00000003" || r.Status != "failed" {
 		t.Fatal(r)
+	}
+}
+
+func TestSourceRecoveryInBatch(t *testing.T) {
+	dir, f := fixture(t, "unoq", 512)
+	f.disks["00000002"] = make(map[int][]byte)
+	for lun, data := range f.disks["00000001"] {
+		f.disks["00000002"][lun] = append([]byte(nil), data...)
+	}
+	opts := options("unoq", "1", "2")
+	opts.RestoreSource = true
+	results, err := Flash(context.Background(), f.run, dir, opts)
+	if err != nil || len(results) != 2 || results[0].Status != "verified" || results[1].Status != "verified" {
+		t.Fatalf("%v %v", results, err)
 	}
 }
